@@ -34,6 +34,8 @@ resource "aws_sqs_queue" "book_request" {
 
 # -----------------------------------------------------------------------------
 # Queue Policy — grants Lambda service access to the main queue
+# NOTE: When Lambda functions are created, add an aws:SourceArn condition to
+# restrict access to specific function ARNs for least-privilege.
 # -----------------------------------------------------------------------------
 resource "aws_sqs_queue_policy" "book_request_policy" {
   queue_url = aws_sqs_queue.book_request.id
