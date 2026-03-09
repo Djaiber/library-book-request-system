@@ -51,6 +51,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_logs" {
     status = "Enabled"
     filter {}
 
+    # 365-day retention balances audit traceability with storage cost;
+    # adjust to meet specific compliance requirements (e.g. PCI-DSS, SOC 2).
     expiration {
       days = 365
     }

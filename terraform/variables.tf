@@ -18,3 +18,9 @@ variable "api_gateway_stage_name" {
   description = "Name of the API Gateway stage for usage plan association"
   type        = string
 }
+
+variable "api_gateway_quota_limit" {
+  description = "Daily request quota for the API Gateway usage plan"
+  type        = number
+  default     = 10000
+}

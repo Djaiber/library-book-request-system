@@ -1,5 +1,7 @@
 # -----------------------------------------------------------------------
 # Stage-Level Method Settings (default throttling for all methods)
+# Stage limits act as an overall ceiling; the usage plan below applies
+# stricter per-key throttle and quota controls.
 # -----------------------------------------------------------------------
 
 resource "aws_api_gateway_method_settings" "all" {
@@ -34,7 +36,7 @@ resource "aws_api_gateway_usage_plan" "book_requests" {
   }
 
   quota_settings {
-    limit  = 10000
+    limit  = var.api_gateway_quota_limit
     period = "DAY"
   }
 
