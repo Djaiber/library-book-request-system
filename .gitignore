@@ -1,0 +1,11 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Environment files
+.env
+
+# OS files
+.DS_Store
