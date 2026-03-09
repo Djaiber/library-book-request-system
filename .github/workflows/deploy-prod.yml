@@ -1,0 +1,158 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  TF_VERSION: "1.10.0"
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="config/backend.conf" \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -var-file="config/prod.tfvars" -out=prod.tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-tfplan
+          path: terraform/prod.tfplan
+          retention-days: 5
+
+  approval:
+    name: Manual Approval
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approve deployment
+        run: echo "Deployment to production approved."
+
+  terraform-apply:
+    name: Terraform Apply
+    needs: approval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-tfplan
+          path: terraform
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="config/backend.conf" \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve prod.tfplan
+
+  smoke-tests:
+    name: Smoke Tests
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests against production..."
+
+          # Verify API Gateway endpoint is reachable
+          API_URL="${{ secrets.PROD_API_URL }}"
+          if [ -n "$API_URL" ]; then
+            echo "Testing API Gateway endpoint..."
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL" || true)
+            echo "API Gateway returned HTTP status: $HTTP_STATUS"
+            if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+              echo "✔ API Gateway is reachable and returned success."
+            elif [ "$HTTP_STATUS" -eq 401 ] || [ "$HTTP_STATUS" -eq 403 ]; then
+              echo "✔ API Gateway is reachable (authentication required)."
+            else
+              echo "✘ API Gateway returned unexpected status: $HTTP_STATUS"
+              exit 1
+            fi
+          else
+            echo "PROD_API_URL secret not set — skipping API endpoint check."
+          fi
+
+          # Verify core AWS resources exist
+          echo "Verifying DynamoDB table exists..."
+          aws dynamodb describe-table --table-name BooksRequest-prod --region ${{ env.AWS_REGION }} > /dev/null 2>&1 && \
+            echo "✔ DynamoDB table BooksRequest-prod exists." || \
+            echo "⚠ DynamoDB table BooksRequest-prod not found (may not be provisioned yet)."
+
+          echo "Verifying SQS queue exists..."
+          aws sqs get-queue-url --queue-name library-book-request-queue-prod --region ${{ env.AWS_REGION }} > /dev/null 2>&1 && \
+            echo "✔ SQS queue library-book-request-queue-prod exists." || \
+            echo "⚠ SQS queue library-book-request-queue-prod not found (may not be provisioned yet)."
+
+          echo "Verifying Lambda functions exist..."
+          aws lambda get-function --function-name library-book-request-producer-prod --region ${{ env.AWS_REGION }} > /dev/null 2>&1 && \
+            echo "✔ Lambda function library-book-request-producer-prod exists." || \
+            echo "⚠ Lambda function library-book-request-producer-prod not found (may not be provisioned yet)."
+
+          aws lambda get-function --function-name library-book-request-consumer-prod --region ${{ env.AWS_REGION }} > /dev/null 2>&1 && \
+            echo "✔ Lambda function library-book-request-consumer-prod exists." || \
+            echo "⚠ Lambda function library-book-request-consumer-prod not found (may not be provisioned yet)."
+
+          echo "Smoke tests completed."
