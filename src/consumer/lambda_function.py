@@ -45,6 +45,7 @@ def build_dynamodb_item(record):
         "title": body["title"],
         "author": body["author"],
         "isbn": body["isbn"],
+        # Transition from producer's PENDING to PENDING_REVIEW once queued for review
         "status": "PENDING_REVIEW",
         "requestTimestamp": datetime.now(timezone.utc).isoformat(),
         "createdAt": body.get("createdAt", datetime.now(timezone.utc).isoformat()),
