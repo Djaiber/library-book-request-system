@@ -1,0 +1,3 @@
+terraform plan -var-file=config/qa.tfvars -out tf_plan_qa
+
+terraform plan -var-file=config/prod.tfvars -out tf_plan_prod
