@@ -88,3 +88,8 @@ override.tf.json
 .terraformrc
 terraform.rc
 *.tfplan
+# Ignore Terraform state files and plan outputs
+terraform.tfstate.d/
+artifacts/*.zip
+tf_plan*
+.vscode/
