@@ -222,6 +222,10 @@ jobs:
           name: tfplan-prod
           path: ${{ env.WORKING_DIR }}
       
+      - name: Create artifacts directory
+        run: mkdir -p artifacts
+        working-directory: ${{ env.WORKING_DIR }}/..
+      
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
         run: |
