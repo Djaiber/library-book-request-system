@@ -266,18 +266,6 @@ resource "aws_api_gateway_stage" "dev" {
   )
 }
 
-resource "aws_cloudwatch_log_group" "api_gateway_logs" {
-  name              = "/aws/api-gateway/${local.name_prefix}-book-requests-api"
-  retention_in_days = var.log_retention_days
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-api-gateway-logs"
-    }
-  )
-}
-
 # API Gateway account settings (for CloudWatch logs)
 resource "aws_api_gateway_account" "main" {
   cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
