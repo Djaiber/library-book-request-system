@@ -15,6 +15,9 @@ env:
   AWS_REGION: us-east-2
   TF_VERSION: 1.5.0
   WORKING_DIR: ./terraform
+  TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
+  TF_BACKEND_KEY: ${{ secrets.TF_BACKEND_KEY }}
+  TF_BACKEND_REGION: ${{ secrets.TF_BACKEND_REGION }}
 
 # Concurrency to prevent multiple deployments
 concurrency:
@@ -50,7 +53,16 @@ jobs:
       
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.TF_BACKEND_KEY }}" \
+            -backend-config="region=${{ env.TF_BACKEND_REGION }}"
+      
+      - name: Select Prod Workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform workspace select prod || terraform workspace new prod
       
       - name: Terraform Validate
         working-directory: ${{ env.WORKING_DIR }}
@@ -90,13 +102,25 @@ jobs:
       
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.TF_BACKEND_KEY }}" \
+            -backend-config="region=${{ env.TF_BACKEND_REGION }}"
+      
+      - name: Select Prod Workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform workspace select prod || terraform workspace new prod
       
       - name: Terraform Plan
         id: plan
         working-directory: ${{ env.WORKING_DIR }}
         run: |
-          terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
+          terraform plan \
+            -var-file="config/prod.tfvars" \
+            -no-color \
+            -out=tfplan_prod 2>&1 | tee plan_output.txt
           exitcode=${PIPESTATUS[0]}
           echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
           
@@ -121,7 +145,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-prod
-          path: ${{ env.WORKING_DIR }}/tfplan
+          path: ${{ env.WORKING_DIR }}/tfplan_prod
           retention-days: 7
       
       - name: Create Plan Summary
@@ -154,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: 
       name: production
-      url: ${{ needs.deploy.outputs.api-url }}
+      url: ${{ needs.apply.outputs.api-url }}
     
     # Only run if plan has changes
     if: needs.plan.outputs.plan-has-changes == 'true'
@@ -199,13 +223,22 @@ jobs:
       
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.TF_BACKEND_KEY }}" \
+            -backend-config="region=${{ env.TF_BACKEND_REGION }}"
+      
+      - name: Select Prod Workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform workspace select prod || terraform workspace new prod
       
       - name: Terraform Apply
         id: apply
         working-directory: ${{ env.WORKING_DIR }}
         run: |
-          terraform apply -auto-approve tfplan
+          terraform apply -auto-approve tfplan_prod
           
           # Get outputs for smoke tests
           echo "api-url=$(terraform output -raw api_endpoint)" >> $GITHUB_OUTPUT
@@ -310,7 +343,7 @@ jobs:
           echo "❌ Smoke tests failed! Check the deployment."
           exit 1
   
-  # Job 6: Post-deployment notifications (optional)
+  # Job 6: Post-deployment notifications
   notify:
     name: Send Notifications
     needs: [apply, smoke-tests]
