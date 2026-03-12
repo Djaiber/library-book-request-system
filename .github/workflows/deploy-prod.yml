@@ -220,15 +220,15 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
       
+      - name: Create artifacts directory #Change the order of this step and the Terraform Init step to avoid creating artifacts directory in the wrong place
+        run: mkdir -p artifacts
+        working-directory: ${{ env.WORKING_DIR }}/..
+      
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
         with:
           name: tfplan-prod
           path: ${{ env.WORKING_DIR }}
-      
-      - name: Create artifacts directory
-        run: mkdir -p artifacts
-        working-directory: ${{ env.WORKING_DIR }}/..
       
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
