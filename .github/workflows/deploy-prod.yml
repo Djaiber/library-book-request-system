@@ -291,79 +291,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pytest
       
-      - name: Run Smoke Tests
+      - name: Run Smoke Tests #Use the API URL output from the apply job to run tests against the deployed API
+        run: |
+          python tests/test_api.py
         env:
           API_URL: ${{ needs.apply.outputs.api-url }}
-        run: |
-          cat > smoke_test.py << 'EOF'
-          import requests
-          import sys
-          import time
-          
-          def test_api_endpoint():
-              api_url = "${{ env.API_URL }}"
-              print(f"Testing API endpoint: {api_url}")
-              
-              # Test 1: Health check (OPTIONS)
-              options_response = requests.options(api_url)
-              assert options_response.status_code == 200, "OPTIONS request failed"
-              print("✅ OPTIONS request successful")
-              
-              # Test 2: Valid request
-              payload = {
-                  "isbn": "9780451524935",
-                  "requesterEmail": "smoke-test@example.com",
-                  "query": "smoke test",
-                  "notes": "Production smoke test"
-              }
-              
-              response = requests.post(api_url, json=payload)
-              assert response.status_code == 202, f"Expected 202, got {response.status_code}"
-              
-              data = response.json()
-              assert "requestId" in data, "Response missing requestId"
-              assert "sqsMessageId" in data, "Response missing sqsMessageId"
-              
-              print(f"✅ Valid request successful - Request ID: {data['requestId']}")
-              
-              # Test 3: Invalid request (missing fields)
-              invalid_payload = {"isbn": "9780451524935"}
-              response = requests.post(api_url, json=invalid_payload)
-              assert response.status_code == 400, f"Expected 400, got {response.status_code}"
-              
-              print("✅ Invalid request correctly rejected")
-              
-              # Wait for consumer to process
-              print("⏳ Waiting for consumer to process...")
-              time.sleep(5)
-              
-              return True
-          
-          if __name__ == "__main__":
-              try:
-                  test_api_endpoint()
-                  print("\n🎉 All smoke tests passed!")
-                  sys.exit(0)
-              except AssertionError as e:
-                  print(f"\n❌ Smoke test failed: {e}")
-                  sys.exit(1)
-              except Exception as e:
-                  print(f"\n❌ Unexpected error: {e}")
-                  sys.exit(1)
-          EOF
-          
-          python smoke_test.py
       
       - name: Notify Success
         if: success()
         run: |
-          echo "✅ Production deployment successful!"
+          echo "Production deployment successful!"
           echo "API URL: ${{ needs.apply.outputs.api-url }}"
       
       - name: Notify Failure
         if: failure()
         run: |
-          echo "❌ Smoke tests failed! Check the deployment."
+          echo "Smoke tests failed! Check the deployment."
           exit 1
   
   # Job 6: Post-deployment notifications
