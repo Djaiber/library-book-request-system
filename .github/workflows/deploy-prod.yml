@@ -101,8 +101,10 @@ jobs:
           terraform_wrapper: false
 
       - name: Create artifacts directory        # Needed for plan output and future artifacts
-        run: mkdir -p artifacts
-        working-directory: ${{ env.WORKING_DIR }}/..
+        run: |
+          mkdir -p artifacts
+          echo "Created at: $(pwd)/artifacts"
+          ls -la
 
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
@@ -221,8 +223,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
       
       - name: Create artifacts directory #Change the order of this step and the Terraform Init step to avoid creating artifacts directory in the wrong place
-        run: mkdir -p artifacts
-        working-directory: ${{ env.WORKING_DIR }}/..
+        run: mkdir -p artifacts # Fix right location of artifacts directory
       
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
