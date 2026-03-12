@@ -99,7 +99,11 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
-      
+
+      - name: Create artifacts directory        # Needed for plan output and future artifacts
+        run: mkdir -p artifacts
+        working-directory: ${{ env.WORKING_DIR }}/..
+
       - name: Terraform Init
         working-directory: ${{ env.WORKING_DIR }}
         run: |
