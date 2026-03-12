@@ -119,6 +119,7 @@ jobs:
         run: |
           terraform plan \
             -var-file="config/prod.tfvars" \
+            -var="bigbook_api_key=${{ secrets.BIGBOOK_API_KEY_PROD }}" \
             -no-color \
             -out=tfplan_prod 2>&1 | tee plan_output.txt
           exitcode=${PIPESTATUS[0]}
