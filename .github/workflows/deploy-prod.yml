@@ -147,6 +147,13 @@ jobs:
           
           exit $exitcode
         continue-on-error: true
+
+      - name: Upload Lambda ZIPs #Load lambda zips as artifacts for debugging and future reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-zips
+          path: artifacts/
+          retention-days: 1
       
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
@@ -224,6 +231,12 @@ jobs:
       
       - name: Create artifacts directory #Change the order of this step and the Terraform Init step to avoid creating artifacts directory in the wrong place
         run: mkdir -p artifacts # Fix right location of artifacts directory
+
+      - name: Download Lambda ZIPs
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-zips
+          path: artifacts/
       
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
