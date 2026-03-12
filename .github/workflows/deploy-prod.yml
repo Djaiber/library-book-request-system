@@ -154,7 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: 
       name: production
-      url: ${{ steps.deploy.outputs.api-url }}
+      url: ${{ needs.deploy.outputs.api-url }}
     
     # Only run if plan has changes
     if: needs.plan.outputs.plan-has-changes == 'true'
@@ -251,7 +251,7 @@ jobs:
               # Test 1: Health check (OPTIONS)
               options_response = requests.options(api_url)
               assert options_response.status_code == 200, "OPTIONS request failed"
-              print("OPTIONS request successful")
+              print("✅ OPTIONS request successful")
               
               # Test 2: Valid request
               payload = {
@@ -268,14 +268,14 @@ jobs:
               assert "requestId" in data, "Response missing requestId"
               assert "sqsMessageId" in data, "Response missing sqsMessageId"
               
-              print(f" Valid request successful - Request ID: {data['requestId']}")
+              print(f"✅ Valid request successful - Request ID: {data['requestId']}")
               
               # Test 3: Invalid request (missing fields)
               invalid_payload = {"isbn": "9780451524935"}
               response = requests.post(api_url, json=invalid_payload)
               assert response.status_code == 400, f"Expected 400, got {response.status_code}"
               
-              print(" Invalid request correctly rejected")
+              print("✅ Invalid request correctly rejected")
               
               # Wait for consumer to process
               print("⏳ Waiting for consumer to process...")
@@ -289,10 +289,10 @@ jobs:
                   print("\n🎉 All smoke tests passed!")
                   sys.exit(0)
               except AssertionError as e:
-                  print(f"\n Smoke test failed: {e}")
+                  print(f"\n❌ Smoke test failed: {e}")
                   sys.exit(1)
               except Exception as e:
-                  print(f"\n Unexpected error: {e}")
+                  print(f"\n❌ Unexpected error: {e}")
                   sys.exit(1)
           EOF
           
@@ -301,13 +301,13 @@ jobs:
       - name: Notify Success
         if: success()
         run: |
-          echo "Production deployment successful!"
+          echo "✅ Production deployment successful!"
           echo "API URL: ${{ needs.apply.outputs.api-url }}"
       
       - name: Notify Failure
         if: failure()
         run: |
-          echo "Smoke tests failed! Check the deployment."
+          echo "❌ Smoke tests failed! Check the deployment."
           exit 1
   
   # Job 6: Post-deployment notifications (optional)
@@ -318,8 +318,17 @@ jobs:
     if: always()
     
     steps:
-      - name: Send Slack Notification (if configured)
-        if: secrets.SLACK_WEBHOOK_URL != ''
+      - name: Check if Slack webhook exists
+        id: check-secret
+        run: |
+          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            echo "slack_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "slack_available=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Slack Notification
+        if: steps.check-secret.outputs.slack_available == 'true'
         uses: slackapi/slack-github-action@v1
         with:
           payload: |
