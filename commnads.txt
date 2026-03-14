@@ -1,3 +1,6 @@
 terraform plan -var-file=config/qa.tfvars -out tf_plan_qa
 
 terraform plan -var-file=config/prod.tfvars -out tf_plan_prod
+
+API_URL="https://uvu45g32k6.execute-api.us-east-2.amazonaws.com/prod/requests" \
+  python3 tests/test_api.py
