@@ -1,0 +1,347 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'src/**'
+      - '.github/workflows/deploy-prod.yml'
+  workflow_dispatch:  # Allow manual triggers
+
+# Environment variables used across jobs
+env:
+  AWS_REGION: us-east-2
+  TF_VERSION: 1.5.0
+  WORKING_DIR: ./terraform
+  TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
+  TF_BACKEND_KEY: ${{ secrets.TF_BACKEND_KEY }}
+  TF_BACKEND_REGION: ${{ secrets.TF_BACKEND_REGION }}
+
+# Concurrency to prevent multiple deployments
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false  # Don't cancel running deployments
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  # Job 1: Validate Terraform configuration
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      
+      - name: Terraform Init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.TF_BACKEND_KEY }}" \
+            -backend-config="region=${{ env.TF_BACKEND_REGION }}"
+      
+      - name: Select Prod Workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform workspace select prod || terraform workspace new prod
+      
+      - name: Terraform Validate
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform validate
+      
+      - name: Terraform Format Check
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform fmt -check -recursive || echo "::warning::Terraform files need formatting"
+  
+  # Job 2: Plan infrastructure changes
+  plan:
+    name: Terraform Plan
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    
+    # Outputs to share with apply job
+    outputs:
+      plan-exitcode: ${{ steps.plan.outputs.exitcode }}
+      plan-has-changes: ${{ steps.plan.outputs.has-changes }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Create artifacts directory        # Needed for plan output and future artifacts
+        run: |
+          mkdir -p artifacts
+          echo "Created at: $(pwd)/artifacts"
+          ls -la
+
+      - name: Terraform Init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.TF_BACKEND_KEY }}" \
+            -backend-config="region=${{ env.TF_BACKEND_REGION }}"
+      
+      - name: Select Prod Workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform workspace select prod || terraform workspace new prod
+      
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform plan \
+            -var-file="config/prod.tfvars" \
+            -var="bigbook_api_key=${{ secrets.BIGBOOK_API_KEY_PROD }}" \
+            -no-color \
+            -out=tfplan_prod 2>&1 | tee plan_output.txt
+          exitcode=${PIPESTATUS[0]}
+          echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
+          
+          # Check if plan has changes
+          if grep -q "No changes." plan_output.txt; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+          
+          # Format plan output for PR comment
+          {
+            echo 'PLAN_OUTPUT<<EOF'
+            cat plan_output.txt
+            echo EOF
+          } >> $GITHUB_ENV
+          
+          exit $exitcode
+        continue-on-error: true
+
+      - name: Upload Lambda ZIPs #Load lambda zips as artifacts for debugging and future reference
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: lambda-zips
+          path: artifacts/
+          retention-days: 1
+      
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: tfplan-prod
+          path: ${{ env.WORKING_DIR }}/tfplan_prod
+          retention-days: 7
+      
+      - name: Create Plan Summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7.0.1
+        with:
+          script: |
+            const output = `### Terraform Plan Results (Production)
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`\n
+            ${process.env.PLAN_OUTPUT}
+            \`\`\`
+            </details>
+            
+            *Plan generated at: ${new Date().toISOString()}*
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+  
+  # Job 3: Manual approval
+  approve:
+    name: Manual Approval
+    needs: [validate, plan]
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: ${{ needs.apply.outputs.api-url }}
+    
+    # Only run if plan has changes
+    if: needs.plan.outputs.plan-has-changes == 'true'
+    
+    steps:
+      - name: Wait for manual approval
+        run: |
+          echo "Waiting for manual approval in GitHub Environment"
+          echo "Environment URL: ${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}"
+  
+  # Job 4: Apply infrastructure changes
+  apply:
+    name: Terraform Apply
+    needs: [validate, plan, approve]
+    runs-on: ubuntu-latest
+    environment: production
+    
+    # Output API URL for smoke tests
+    outputs:
+      api-url: ${{ steps.get-api-url.outputs.url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      
+      - name: Create artifacts directory #Change the order of this step and the Terraform Init step to avoid creating artifacts directory in the wrong place
+        run: mkdir -p artifacts # Fix right location of artifacts directory
+
+      - name: Download Lambda ZIPs
+        uses: actions/download-artifact@v4.2.1
+        with:
+          name: lambda-zips
+          path: artifacts/
+      
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4.2.1
+        with:
+          name: tfplan-prod
+          path: ${{ env.WORKING_DIR }}
+      
+      - name: Terraform Init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ env.TF_BACKEND_KEY }}" \
+            -backend-config="region=${{ env.TF_BACKEND_REGION }}"
+      
+      - name: Select Prod Workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform workspace select prod || terraform workspace new prod
+      
+      - name: Terraform Apply
+        id: apply
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform apply -auto-approve tfplan_prod
+          
+          # Get outputs for smoke tests
+          echo "api-url=$(terraform output -raw api_endpoint)" >> $GITHUB_OUTPUT
+      
+      - name: Get API URL
+        id: get-api-url
+        run: echo "url=${{ steps.apply.outputs.api-url }}" >> $GITHUB_OUTPUT
+  
+  # Job 5: Smoke tests
+  smoke-tests:
+    name: Run Smoke Tests
+    needs: [apply]
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+      
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pytest
+      
+      - name: Run Smoke Tests #Use the API URL output from the apply job to run tests against the deployed API
+        run: |
+          python tests/test_api.py
+        env:
+          API_URL: ${{ needs.apply.outputs.api-url }}
+      
+      - name: Notify Success
+        if: success()
+        run: |
+          echo "Production deployment successful!"
+          echo "API URL: ${{ needs.apply.outputs.api-url }}"
+      
+      - name: Notify Failure
+        if: failure()
+        run: |
+          echo "Smoke tests failed! Check the deployment."
+          exit 1
+  
+  # Job 6: Post-deployment notifications
+  notify:
+    name: Send Notifications
+    needs: [apply, smoke-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Check if Slack webhook exists
+        id: check-secret
+        run: |
+          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            echo "slack_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "slack_available=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Slack Notification
+        if: steps.check-secret.outputs.slack_available == 'true'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "Production Deployment ${{ needs.smoke-tests.result == 'success' && '✅ Successful' || '❌ Failed' }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Production Deployment* ${{ needs.smoke-tests.result == 'success' && '✅' || '❌' }}\nAPI URL: ${{ needs.apply.outputs.api-url }}\nStatus: ${{ needs.smoke-tests.result == 'success' && 'Success' || 'Failed' }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
